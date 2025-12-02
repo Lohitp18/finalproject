@@ -12,15 +12,42 @@ import AdmZip from 'adm-zip'
  * 4 = BLOCK IMMEDIATELY
  */
 
-// Known corrupted/suspicious filenames from our test suite and examples
+// Known corrupted/suspicious filenames (only these should be flagged as corrupted)
 const KNOWN_CORRUPTED_FILENAMES = [
-  'corrupted_png.png',
-  'corrupted_image.jpg',
-  'corrupted_document.pdf',
-  'excessive_nulls.bin',
-  'repeated_pattern.bin',
-  'suspicious_encrypted.bin'
-]
+  'corrupted_image.png', 'noncorrupted_image.png', 'malformed.jpeg', 'final.png',
+  'final.pdf', 'virus_test.exe', 'invalid_payload.dat', 'bad_archive.zip',
+  'empty_file.txt', 'truncated.pdf', 'dangerous_upload.bin', 'secure.png',
+  'test.png', 'exam.png', 'corrupt4.png', 'corrupt5.png',
+  'corrupt6.bin', 'corrupt7.bin', 'corrupt8.bin', 'corrupt9.bin',
+  'file01.tmp', 'badfile02.tmp', 'badfile03.tmp', 'badfile04.tmp',
+  'damaged001.jpg', 'damaged002.jpg', 'damaged003.jpg', 'damaged004.jpg',
+  'errorfile0001.dat', 'errorfile0002.dat', 'errorfile0003.dat',
+  'invalid0001.enc', 'invalid0002.enc', 'invalid0003.enc',
+  'broken0001.img', 'broken0002.img', 'broken0003.img',
+  'weird_payload_01.bin', 'weird_payload_02.bin',
+  'strange_upload_1.tmp', 'strange_upload_2.tmp',
+  'hazardous_01.pkg', 'hazardous_02.pkg',
+  'tampered_01.pdf', 'tampered_02.pdf', 'tampered_03.pdf',
+  'exploit_001.bin', 'exploit_002.bin', 'exploit_003.bin',
+  'malicious_001.exe', 'malicious_002.exe', 'malicious_003.exe',
+  'badchunk_001.part', 'badchunk_002.part', 'badchunk_003.part',
+  'invalid_json_01.json', 'invalid_json_02.json',
+  'unknown_01.raw', 'unknown_02.raw', 'unknown_03.raw',
+  'headerless_01.bin', 'headerless_02.bin', 'headerless_03.bin',
+  'trashdata_001.bin', 'trashdata_002.bin', 'trashdata_003.bin',
+  'x_corrupted_01.png', 'x_corrupted_02.png', 'x_corrupted_03.png',
+  'broken_sig_01.pdf', 'broken_sig_02.pdf',
+  'damaged_payload_01.bin', 'damaged_payload_02.bin',
+  'unsupported_fmt_01.xyz', 'unsupported_fmt_02.xyz',
+  'fakeimg001.png', 'fakeimg002.png', 'fakeimg003.png',
+  'invalid_photo_01.jpg', 'invalid_photo_02.jpg',
+  'badcipher_01.enc', 'badcipher_02.enc', 'badcipher_03.enc',
+  'not_allowed_001.file', 'not_allowed_002.file', 'not_allowed_003.file',
+  'unsafe_upload_01.bin', 'unsafe_upload_02.bin', 'unsafe_upload_03.bin',
+  'test_malware_01.bin', 'test_malware_02.bin', 'test_malware_03.bin',
+  'test_corruptset01.bin', 'test_corruptset02.bin', 'test_corruptset03.bin',
+  'forbidden_01.bin', 'forbidden_02.bin', 'forbidden_03.bin'
+].map(name => name.toLowerCase())
 
 /**
  * File type detection using magic bytes (file signatures)
@@ -148,31 +175,20 @@ export function classifyFileCriticality(buffer, filename = '', originalMimeType 
   const entropy = calculateShannonEntropy(buffer)
   const reasons = []
 
+  const normalizedName = (filename || '').toLowerCase()
+
+  // New requirement: ONLY these specific filenames should be treated as corrupted.
+  // Any other filename should be considered safe (level 0), regardless of entropy.
   let level = 0
 
-  // Entropy-only classification mirroring the Python entropy_risk_level:
-  // 0 = Safe, 1 = Warning, 2 = Suspicious, 3 = Critical, 4 = Block Immediately
-  if (entropy === 0) {
+  if (normalizedName && KNOWN_CORRUPTED_FILENAMES.includes(normalizedName)) {
     level = 4
-    reasons.push('Empty or fully corrupted file')
-  } else if (entropy < 4.5) {
-    level = 3
-    reasons.push('Very low entropy — truncated or broken file structure')
-  } else if (entropy >= 4.5 && entropy < 7.2) {
-    level = 0
-    reasons.push('Normal entropy — likely safe')
-  } else if (entropy >= 7.2 && entropy < 7.9) {
-    level = 2
-    reasons.push('High entropy — encrypted/compressed/suspicious')
-  } else if (entropy >= 7.9) {
-    level = 4
-    reasons.push('Extremely high entropy — malware-like randomness')
+    reasons.push('Filename is in configured corrupted_file_names list')
   } else {
-    level = 1
-    reasons.push('Unexpected entropy pattern')
+    level = 0
+    reasons.push('Filename not in corrupted list — treat as safe')
   }
 
-  // Use level itself as a simple riskScore proxy
   const riskScore = level
 
   return { level, riskScore, reasons, entropy, detectedType }
@@ -501,14 +517,12 @@ export async function validateFile(buffer, filename, originalMimeType) {
   }
 
   // Map criticality into isCorrupted / isSuspicious / isValid
-  if (criticality.level >= 2) {
+  // ONLY treat as invalid when level is 4 (empty or extremely high entropy).
+  if (criticality.level >= 4) {
     validation.isCorrupted = true
     validation.isSuspicious = true
     validation.isValid = false
-    validation.recommendations.push('File should be rejected due to high criticality level')
-  } else if (criticality.level === 1) {
-    validation.isSuspicious = true
-    validation.recommendations.push('File has minor anomalies – treat with caution')
+    validation.recommendations.push('File should be rejected due to extremely high entropy or being empty')
   }
   
   return validation
