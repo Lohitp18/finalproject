@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -6,6 +6,7 @@ import { Progress } from '@/components/ui/Progress'
 import { Upload, File, CheckCircle, XCircle, Lock, AlertCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api, CryptoUtils, FileTransfer } from '@/lib/api'
+import apiClient from '@/api/client'
 import { formatBytes, generateRandomId } from '@/lib/utils'
 import { toast } from 'react-hot-toast'
 
@@ -22,6 +23,24 @@ export function FileTransferPanel() {
   const [uploadQueue, setUploadQueue] = useState<UploadingFile[]>([])
 
   const hasSession = !!(typeof window !== 'undefined' && localStorage.getItem('session_key'))
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking')
+
+  // Check backend health on mount
+  useEffect(() => {
+    const checkBackend = async () => {
+      setBackendStatus('checking')
+      try {
+        const health = await apiClient.checkHealth()
+        setBackendStatus(health.ok ? 'online' : 'offline')
+      } catch (error) {
+        setBackendStatus('offline')
+      }
+    }
+
+    checkBackend()
+    const interval = setInterval(checkBackend, 10000) // Check every 10 seconds
+    return () => clearInterval(interval)
+  }, [])
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -58,8 +77,49 @@ export function FileTransferPanel() {
     }
   }
 
-  const handleFiles = (files: File[]) => {
-    const newUploads: UploadingFile[] = files.map(file => ({
+  const handleFiles = async (files: File[]) => {
+    // Check backend availability first
+    if (backendStatus === 'offline') {
+      toast.error('Backend server is not available. Please start the server.')
+      return
+    }
+
+    // Validate files before adding to queue
+    const validFiles: File[] = []
+    const invalidFiles: string[] = []
+
+    files.forEach(file => {
+      // Check if file exists and has content
+      if (!file || file.size === 0) {
+        invalidFiles.push(file?.name || 'Unknown file')
+        toast.error(`${file?.name || 'File'}: File is empty or invalid`)
+        return
+      }
+
+      // Check file size (max 100MB)
+      const maxSize = 100 * 1024 * 1024 // 100MB
+      if (file.size > maxSize) {
+        invalidFiles.push(file.name)
+        toast.error(`${file.name}: File size exceeds 100MB limit`)
+        return
+      }
+
+      // Check if file has a valid name
+      if (!file.name || file.name.trim().length === 0) {
+        invalidFiles.push('Unnamed file')
+        toast.error('File must have a valid name')
+        return
+      }
+
+      validFiles.push(file)
+    })
+
+    if (validFiles.length === 0) {
+      toast.error('No valid files to upload')
+      return
+    }
+
+    const newUploads: UploadingFile[] = validFiles.map(file => ({
       id: generateRandomId(),
       user_id: 'current-user', // This would come from auth context
       filename: file.name,
@@ -78,12 +138,32 @@ export function FileTransferPanel() {
 
   const processUpload = async (upload: UploadingFile) => {
     try {
+      // Check backend availability
+      if (backendStatus === 'offline') {
+        updateUploadStatus(upload.id, 'failed', 0)
+        toast.error(`${upload.filename}: Backend server is not available`)
+        return
+      }
+
+      // Validate file again before processing
+      if (!upload.file || upload.file.size === 0) {
+        updateUploadStatus(upload.id, 'failed', 0)
+        toast.error(`${upload.filename}: File is empty or invalid`)
+        return
+      }
+
       // Step 1: Start encryption
       updateUploadStatus(upload.id, 'encrypting', 10)
       await new Promise(resolve => setTimeout(resolve, 300))
 
       // Step 2: Encrypt file (client-side)
-      const sessionKey = localStorage.getItem('session_key') || 'dummy-session-key-for-demo'
+      const sessionKey = localStorage.getItem('session_key')
+      if (!sessionKey) {
+        updateUploadStatus(upload.id, 'failed', 0)
+        toast.error(`${upload.filename}: No secure session established`)
+        return
+      }
+
       const { encrypted, nonce, tag } = await CryptoUtils.encryptFile(upload.file, sessionKey)
       
       updateUpload(upload.id, {
@@ -107,23 +187,40 @@ export function FileTransferPanel() {
       formData.append('nonce', upload.aes_nonce || '')
       formData.append('tag', upload.verification_tag || '')
 
-      const response = await api.uploadFile(formData, (progress) => {
-        updateUploadStatus(upload.id, 'uploading', 40 + (progress * 0.6))
-      })
-
-      // Step 4: Verify upload via IDS verdict
-      const verdict = (response as any)?.status || (response as any)?.ids_result?.verdict || 'normal'
-      updateUpload(upload.id, { status: verdict === 'suspicious' ? 'failed' : 'completed', progress: 100, verdict })
-      if (verdict === 'suspicious') {
-        toast.error(`${upload.filename}: flagged as suspicious by IDS`)
-      } else {
-        toast.success(`${upload.filename} uploaded successfully`)
+      let response
+      try {
+        response = await apiClient.uploadFile(formData, (progress) => {
+          updateUploadStatus(upload.id, 'uploading', 40 + (progress * 0.6))
+        })
+      } catch (uploadError: any) {
+        // Handle 403 (blocked) and other errors
+        if (uploadError?.response?.status === 403) {
+          const errorData = uploadError.response.data
+          const verdict = errorData?.details?.verdict || 'suspicious'
+          updateUpload(upload.id, { status: 'failed', progress: 100, verdict: 'suspicious' })
+          toast.error(`${upload.filename}: ${errorData?.message || 'File blocked by IDS'} - Not stored in database`)
+          return
+        }
+        throw uploadError // Re-throw other errors
       }
 
-    } catch (error) {
+      // Step 4: Verify upload via IDS verdict
+      const verdict = response.status || (response.details as any)?.verdict || 'normal'
+      const isSuspicious = verdict === 'suspicious' || response.status === 'suspicious'
+      
+      if (isSuspicious) {
+        updateUpload(upload.id, { status: 'failed', progress: 100, verdict: 'suspicious' })
+        toast.error(`${upload.filename}: File flagged as suspicious by IDS - Upload blocked and not stored`)
+      } else {
+        updateUpload(upload.id, { status: 'completed', progress: 100, verdict: 'normal' })
+        toast.success(`${upload.filename} uploaded and stored successfully in database`)
+      }
+
+    } catch (error: any) {
       console.error('Upload failed:', error)
       updateUploadStatus(upload.id, 'failed', 0)
-      toast.error(`Failed to upload ${upload.filename}`)
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Unknown error'
+      toast.error(`Failed to upload ${upload.filename}: ${errorMsg}`)
     }
   }
 
@@ -173,9 +270,18 @@ export function FileTransferPanel() {
           <h1 className="text-2xl font-bold text-white">Secure File Transfer</h1>
           <p className="text-gray-400">Upload files with end-to-end encryption</p>
         </div>
-        <Badge variant={hasSession ? 'success' : 'destructive'} className="text-sm">
-          {hasSession ? 'Session: Active' : 'Session: Not established'}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={hasSession ? 'success' : 'destructive'} className="text-sm">
+            {hasSession ? 'Session: Active' : 'Session: Not established'}
+          </Badge>
+          <Badge 
+            variant={backendStatus === 'online' ? 'success' : backendStatus === 'checking' ? 'default' : 'destructive'} 
+            className="text-sm"
+          >
+            {backendStatus === 'online' ? 'Backend: Online' : 
+             backendStatus === 'checking' ? 'Backend: Checking...' : 'Backend: Offline'}
+          </Badge>
+        </div>
       </div>
 
       {/* Upload Area */}
@@ -186,7 +292,7 @@ export function FileTransferPanel() {
               dragActive 
                 ? 'border-blue-500 bg-blue-500/10' 
                 : 'border-gray-600 hover:border-gray-500'
-            } ${!hasSession ? 'opacity-50 pointer-events-none' : ''}`}
+            } ${!hasSession || backendStatus === 'offline' ? 'opacity-50 pointer-events-none' : ''}`}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
@@ -197,7 +303,7 @@ export function FileTransferPanel() {
               multiple
               onChange={handleFileSelect}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              disabled={!hasSession}
+              disabled={!hasSession || backendStatus === 'offline'}
             />
             
             <motion.div
@@ -210,7 +316,9 @@ export function FileTransferPanel() {
               <h3 className={`text-lg font-medium mb-2 ${
                 dragActive ? 'text-blue-400' : 'text-white'
               }`}>
-                {hasSession ? (dragActive ? 'Drop files here' : 'Upload Files') : 'Establish a secure connection first'}
+                {!hasSession ? 'Establish a secure connection first' :
+                 backendStatus === 'offline' ? 'Backend server is offline' :
+                 dragActive ? 'Drop files here' : 'Upload Files'}
               </h3>
               <p className="text-gray-400 mb-4">
                 Drag and drop files here, or click to browse

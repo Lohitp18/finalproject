@@ -157,6 +157,19 @@ class ApiClient {
     const { data } = await this.client.get('/logs/connections')
     return data as ConnectionLog[]
   }
+
+  // Health check
+  async checkHealth(): Promise<{ ok: boolean; status?: string }> {
+    try {
+      const { data } = await this.client.get('/health', { timeout: 5000 })
+      return { ok: true, status: data.status || 'healthy' }
+    } catch (error: any) {
+      if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK' || !error.response) {
+        return { ok: false, status: 'backend_unavailable' }
+      }
+      return { ok: false, status: 'unhealthy' }
+    }
+  }
 }
 
 export const apiClient = new ApiClient()

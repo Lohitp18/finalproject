@@ -22,6 +22,11 @@ export function IntrusionAlertsPanel() {
   useEffect(() => {
     loadAlerts()
     
+    // Auto-refresh alerts every 5 seconds
+    const refreshInterval = setInterval(() => {
+      loadAlerts()
+    }, 5000)
+    
     if (liveMode) {
       // Connect to WebSocket for real-time alerts
       const ws = api.connectWebSocket((newAlert) => {
@@ -35,8 +40,13 @@ export function IntrusionAlertsPanel() {
         }
       })
 
-      return () => ws.close()
+      return () => {
+        clearInterval(refreshInterval)
+        ws.close()
+      }
     }
+    
+    return () => clearInterval(refreshInterval)
   }, [liveMode])
 
   useEffect(() => {
@@ -120,6 +130,15 @@ export function IntrusionAlertsPanel() {
           <p className="text-gray-400">Real-time threat monitoring and analysis</p>
         </div>
         <div className="flex items-center space-x-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadAlerts}
+            className="flex items-center"
+          >
+            <Clock className="h-4 w-4 mr-1" />
+            Refresh
+          </Button>
           <Button
             variant={liveMode ? 'default' : 'outline'}
             size="sm"
@@ -279,10 +298,48 @@ export function IntrusionAlertsPanel() {
                             </div>
                           </div>
 
-                          {alert.attack_vector && (
-                            <div className="mt-3 p-2 bg-gray-700/50 rounded text-xs">
-                              <span className="text-gray-400">Attack Vector:</span>
-                              <p className="text-gray-300 mt-1">{alert.attack_vector}</p>
+                          {alert.details && (
+                            <div className="mt-3 p-3 bg-gray-700/50 rounded text-xs space-y-2">
+                              {alert.details.filename && (
+                                <div>
+                                  <span className="text-gray-400">Filename:</span>
+                                  <p className="text-gray-300 font-mono">{alert.details.filename}</p>
+                                </div>
+                              )}
+                              {alert.details.issues && Array.isArray(alert.details.issues) && alert.details.issues.length > 0 && (
+                                <div>
+                                  <span className="text-gray-400">Issues Detected:</span>
+                                  <ul className="list-disc list-inside text-red-300 mt-1">
+                                    {alert.details.issues.map((issue, idx) => (
+                                      <li key={idx}>{issue}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {alert.details.reason && (
+                                <div>
+                                  <span className="text-gray-400">Reason:</span>
+                                  <p className="text-yellow-300 mt-1">{alert.details.reason}</p>
+                                </div>
+                              )}
+                              {alert.details.detected_type && (
+                                <div>
+                                  <span className="text-gray-400">Detected Type:</span>
+                                  <p className="text-gray-300">{alert.details.detected_type}</p>
+                                </div>
+                              )}
+                              {alert.details.entropy !== undefined && (
+                                <div>
+                                  <span className="text-gray-400">Entropy:</span>
+                                  <p className="text-gray-300">{alert.details.entropy.toFixed(2)}</p>
+                                </div>
+                              )}
+                              {alert.attack_vector && (
+                                <div>
+                                  <span className="text-gray-400">Attack Vector:</span>
+                                  <p className="text-gray-300 mt-1">{alert.attack_vector}</p>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

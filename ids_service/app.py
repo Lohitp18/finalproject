@@ -3,6 +3,7 @@ import joblib
 import pandas as pd
 import numpy as np
 import os
+from inference import predict_handshake, predict_file
 
 app = Flask(__name__)
 
@@ -37,21 +38,13 @@ def predict_handshake_endpoint():
         if not data:
             return jsonify({"error": "No data provided"}), 400
         
-        # Extract features and convert booleans to int
-        features = {k: int(v) if isinstance(v, bool) else v for k, v in data.items() if k in HANDSHAKE_FEATURES}
-        # Fill missing features with defaults
-        for f in HANDSHAKE_FEATURES:
-            features.setdefault(f, 0)
-        
-        X = pd.DataFrame([features], columns=HANDSHAKE_FEATURES)
-        pred = handshake_model.predict(X)[0]
-        prob = handshake_model.predict_proba(X)[0][1]
-        verdict = "suspicious" if pred == 1 else "normal"
+        # Use enhanced inference function
+        anomaly_score, verdict = predict_handshake(data, handshake_model)
         
         return jsonify({
-            "anomaly_score": float(prob),
+            "anomaly_score": float(anomaly_score),
             "verdict": verdict,
-            "confidence": float(prob)
+            "confidence": float(anomaly_score)
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -64,19 +57,13 @@ def predict_file_endpoint():
         if not data:
             return jsonify({"error": "No data provided"}), 400
         
-        features = {k: int(v) if isinstance(v, bool) else v for k, v in data.items() if k in FILE_FEATURES}
-        for f in FILE_FEATURES:
-            features.setdefault(f, 0)
-        
-        X = pd.DataFrame([features], columns=FILE_FEATURES)
-        pred = file_model.predict(X)[0]
-        prob = file_model.predict_proba(X)[0][1]
-        verdict = "suspicious" if pred == 1 else "normal"
+        # Use enhanced inference function
+        anomaly_score, verdict = predict_file(data, file_model)
         
         return jsonify({
-            "anomaly_score": float(prob),
+            "anomaly_score": float(anomaly_score),
             "verdict": verdict,
-            "confidence": float(prob)
+            "confidence": float(anomaly_score)
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

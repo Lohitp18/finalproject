@@ -12,7 +12,7 @@ import { AdvancedCrypto } from '@/lib/api'
 
 export function HandshakePanel() {
   const [isConnecting, setIsConnecting] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connected' | 'failed'>('idle')
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connecting' | 'connected' | 'failed' | 'backend_unavailable'>('idle')
   const [handshakeSteps, setHandshakeSteps] = useState<HandshakeStep[]>([])
   const [progress, setProgress] = useState(0)
   const [sessionInfo, setSessionInfo] = useState<{
@@ -21,6 +21,34 @@ export function HandshakePanel() {
     publicKey: string
   } | null>(null)
   const [clientSecretKey, setClientSecretKey] = useState<Uint8Array | null>(null)
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking')
+  const [statusMessage, setStatusMessage] = useState<string>('')
+
+  // Check backend health on mount and periodically
+  useEffect(() => {
+    const checkBackend = async () => {
+      setBackendStatus('checking')
+      try {
+        const health = await apiClient.checkHealth()
+        if (health.ok) {
+          setBackendStatus('online')
+          setStatusMessage('Backend is online')
+        } else {
+          setBackendStatus('offline')
+          setStatusMessage('Backend is unavailable')
+          setConnectionStatus('backend_unavailable')
+        }
+      } catch (error) {
+        setBackendStatus('offline')
+        setStatusMessage('Cannot connect to backend')
+        setConnectionStatus('backend_unavailable')
+      }
+    }
+
+    checkBackend()
+    const interval = setInterval(checkBackend, 10000) // Check every 10 seconds
+    return () => clearInterval(interval)
+  }, [])
 
   // Restore session on refresh
   useEffect(() => {
@@ -28,12 +56,12 @@ export function HandshakePanel() {
       const storedKey = localStorage.getItem('session_key')
       const storedHs = localStorage.getItem('handshake_id')
       const storedPub = localStorage.getItem('server_pubkey')
-      if (storedKey && storedHs && storedPub) {
+      if (storedKey && storedHs && storedPub && backendStatus === 'online') {
         setSessionInfo({ handshakeId: storedHs, sessionKey: storedKey, publicKey: storedPub })
         setConnectionStatus('connected')
       }
     } catch {}
-  }, [])
+  }, [backendStatus])
 
   const steps = [
     { id: 'key_generation', name: 'Generate ECDH Key Pair', icon: Key },
@@ -43,13 +71,26 @@ export function HandshakePanel() {
   ]
 
   const initiateHandshake = async () => {
+    // Check backend health first
+    setStatusMessage('Checking backend connection...')
+    const health = await apiClient.checkHealth()
+    if (!health.ok) {
+      setBackendStatus('offline')
+      setConnectionStatus('backend_unavailable')
+      setStatusMessage('Backend is not running. Please start the backend server.')
+      toast.error('Backend server is not available. Please start the server.')
+      return
+    }
+
     setIsConnecting(true)
-    setConnectionStatus('idle')
+    setConnectionStatus('connecting')
     setProgress(0)
     setHandshakeSteps([])
+    setStatusMessage('Initiating secure connection...')
 
     try {
       // Step 1: Generate X25519 Key Pair
+      setStatusMessage('Generating cryptographic keys...')
       updateStep('key_generation', 'in_progress', 'Generating X25519 key pair...')
       setProgress(25)
 
@@ -60,6 +101,7 @@ export function HandshakePanel() {
       updateStep('key_generation', 'completed', 'Key pair generated successfully')
 
       // Step 2: Exchange Public Keys (init)
+      setStatusMessage('Exchanging keys with server...')
       updateStep('key_exchange', 'in_progress', 'Exchanging public keys with server...')
       setProgress(50)
 
@@ -69,6 +111,7 @@ export function HandshakePanel() {
       updateStep('key_exchange', 'completed', 'Public keys exchanged successfully')
 
       // Step 3: Validate handshake (server derives session key and runs IDS)
+      setStatusMessage('Validating connection security...')
       updateStep('signature_verification', 'in_progress', 'Validating handshake with server...')
       setProgress(75)
 
@@ -82,6 +125,7 @@ export function HandshakePanel() {
       updateStep('signature_verification', 'completed', 'Handshake validated successfully')
 
       // Step 4: Establish Secure Session
+      setStatusMessage('Establishing secure session...')
       updateStep('session_establishment', 'in_progress', 'Establishing secure session...')
       setProgress(100)
 
@@ -103,18 +147,28 @@ export function HandshakePanel() {
       } catch {}
 
       setConnectionStatus('connected')
+      setStatusMessage('Secure connection established successfully!')
       toast.success('Secure connection established successfully!')
 
     } catch (error) {
       console.error('Handshake failed:', error)
       setConnectionStatus('failed')
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      setStatusMessage(`Connection failed: ${errorMsg}`)
 
       const currentStep = handshakeSteps.find(step => step.status === 'in_progress')
       if (currentStep) {
-        updateStep(currentStep.step as any, 'failed', `Failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        updateStep(currentStep.step as any, 'failed', `Failed: ${errorMsg}`)
       }
 
-      toast.error('Failed to establish secure connection')
+      // Check if it's a backend connection error
+      if (errorMsg.includes('Network') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('timeout')) {
+        setBackendStatus('offline')
+        setConnectionStatus('backend_unavailable')
+        setStatusMessage('Backend server is not responding')
+      }
+
+      toast.error(`Failed to establish secure connection: ${errorMsg}`)
     } finally {
       setIsConnecting(false)
     }
@@ -173,12 +227,17 @@ export function HandshakePanel() {
         <div className="flex items-center gap-2">
           <Badge 
             variant={
+              backendStatus === 'offline' ? 'destructive' :
               connectionStatus === 'connected' ? 'success' :
-              connectionStatus === 'failed' ? 'destructive' : 'secondary'
+              connectionStatus === 'failed' ? 'destructive' : 
+              connectionStatus === 'connecting' ? 'default' : 'secondary'
             }
             className="text-sm"
           >
-            {connectionStatus === 'connected' ? '🔒 Secure' :
+            {backendStatus === 'offline' ? '⚠️ Backend Offline' :
+             backendStatus === 'checking' ? '🔄 Checking...' :
+             connectionStatus === 'connected' ? '🔒 Secure' :
+             connectionStatus === 'connecting' ? '🔄 Connecting...' :
              connectionStatus === 'failed' ? '❌ Failed' : '⏸️ Idle'}
           </Badge>
           {connectionStatus === 'connected' && (
@@ -226,13 +285,29 @@ export function HandshakePanel() {
               </div>
             )}
 
+            {statusMessage && (
+              <div className={`p-3 rounded-lg text-sm ${
+                backendStatus === 'offline' || connectionStatus === 'failed' 
+                  ? 'bg-red-600/20 border border-red-500/30 text-red-300' 
+                  : connectionStatus === 'connecting'
+                  ? 'bg-blue-600/20 border border-blue-500/30 text-blue-300'
+                  : connectionStatus === 'connected'
+                  ? 'bg-green-600/20 border border-green-500/30 text-green-300'
+                  : 'bg-gray-700/50 border border-gray-600/30 text-gray-300'
+              }`}>
+                {statusMessage}
+              </div>
+            )}
+
             <Button
               onClick={initiateHandshake}
-              disabled={isConnecting || connectionStatus === 'connected'}
-              loading={isConnecting}
-              className="w-full bg-blue-600 hover:bg-blue-700"
+              disabled={isConnecting || connectionStatus === 'connected' || backendStatus === 'offline'}
+              loading={isConnecting || backendStatus === 'checking'}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
             >
-              {connectionStatus === 'connected' ? 'Connected' : 'Establish Secure Connection'}
+              {backendStatus === 'offline' ? 'Backend Offline - Cannot Connect' :
+               connectionStatus === 'connected' ? 'Connected' : 
+               isConnecting ? 'Connecting...' : 'Establish Secure Connection'}
             </Button>
 
             {connectionStatus === 'connected' && sessionInfo && (

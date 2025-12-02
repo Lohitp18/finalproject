@@ -1,6 +1,6 @@
 import { generateRandomId } from './utils'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
 
 export interface AuthUser {
   id: string
@@ -75,7 +75,14 @@ class ApiClient {
     })
 
     if (!response.ok) {
-      throw new Error(`API Error: ${response.statusText}`)
+      let errorMessage = `API Error: ${response.statusText}`
+      try {
+        const errorData = await response.json()
+        errorMessage = errorData.error || errorData.message || errorMessage
+      } catch {
+        // If response is not JSON, use status text
+      }
+      throw new Error(errorMessage)
     }
 
     return response.json()
