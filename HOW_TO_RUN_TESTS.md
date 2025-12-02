@@ -40,7 +40,26 @@ Both should return `{"status":"ok"}` or similar. ✅
 
 ---
 
-### Step 3: Set Test Credentials (If Needed)
+### Step 3: Verify Setup (Recommended)
+
+Run the setup verification script to check prerequisites:
+
+```bash
+python setup_and_verify.py
+```
+
+This will:
+- ✅ Check if server is running
+- ✅ Check if IDS service is running
+- ✅ Create test account if it doesn't exist
+- ✅ Verify API endpoints are accessible
+- ✅ Check test files exist
+
+**If this passes, you're ready to run tests!**
+
+---
+
+### Step 4: Set Test Credentials (If Needed)
 
 If your test account uses different credentials, set environment variables:
 
@@ -66,7 +85,7 @@ export TEST_PASSWORD=Test123!@#
 
 ---
 
-### Step 4: Run the Tests
+### Step 5: Run the Tests
 
 Now you have **3 options**:
 
