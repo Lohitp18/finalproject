@@ -105,12 +105,11 @@ const uploadHandler = async (req, res) => {
       req.file.mimetype
     )
     
-    // If file is clearly corrupted or highly suspicious, reject.
-    // Relaxed thresholds so normal files can pass while obviously bad ones are blocked.
-    const shouldReject =
-      fileValidation.isCorrupted || // strong corruption signal from validators
-      fileValidation.riskScore > 0.7 || // high overall risk score
-      fileValidation.issues.length > 3 // multiple independent issues detected
+    // Decide based on entropy-based criticality level:
+    // level 0 = SAFE, 1 = WARNING, 2 = SUSPICIOUS, 3 = CRITICAL, 4 = BLOCK IMMEDIATELY
+    // Block only when level >= 2 (suspicious or worse).
+    const criticalityLevel = fileValidation.criticalityLevel ?? 0
+    const shouldReject = criticalityLevel >= 2
     
     // Debug logging
     if (shouldReject) {

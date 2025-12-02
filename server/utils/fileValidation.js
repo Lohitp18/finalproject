@@ -144,82 +144,36 @@ function hasMalformedHeader(buffer, filename = '') {
  * Returns { level, reasons[], riskScore, entropy, detectedType }
  */
 export function classifyFileCriticality(buffer, filename = '', originalMimeType = '') {
-  const reasons = []
-  let riskScore = 0
-
-  const size = buffer ? buffer.length : 0
-  const entropy = calculateShannonEntropy(buffer)
   const detectedType = detectFileType(buffer)
+  const entropy = calculateShannonEntropy(buffer)
+  const reasons = []
 
-  // 1. Known corrupted filenames
-  if (filename && KNOWN_CORRUPTED_FILENAMES.includes(filename)) {
-    return {
-      level: 4,
-      riskScore: 10,
-      reasons: ['Known corrupted filename'],
-      entropy,
-      detectedType
-    }
-  }
-
-  // 2. Size abnormalities
-  if (size === 0) {
-    return {
-      level: 4,
-      riskScore: 10,
-      reasons: ['File is empty'],
-      entropy,
-      detectedType
-    }
-  }
-  if (size < 20) {
-    return {
-      level: 3,
-      riskScore: 7,
-      reasons: ['File too small — likely truncated'],
-      entropy,
-      detectedType
-    }
-  }
-
-  // 3. Entropy analysis
-  if (entropy > 7.9) {
-    riskScore += 3
-    reasons.push('High entropy (malware-like)')
-  } else if (entropy > 7.2) {
-    riskScore += 2
-    reasons.push('Moderately high entropy')
-  }
-
-  // 4. Extension risk
-  const extRisk = extensionRisk(filename)
-  riskScore += extRisk
-  if (extRisk === 3) reasons.push('High-risk extension')
-  else if (extRisk === 2) reasons.push('Medium-risk extension')
-
-  // 5. MIME / type mismatch
-  if (!detectedType || detectedType === 'application/octet-stream') {
-    riskScore += 2
-    reasons.push('Unknown or generic detected type')
-  }
-
-  if (originalMimeType && detectedType && originalMimeType !== detectedType && detectedType !== 'application/octet-stream') {
-    riskScore += 1
-    reasons.push(`MIME type mismatch: claimed ${originalMimeType}, detected ${detectedType}`)
-  }
-
-  // 6. Malformed header
-  if (hasMalformedHeader(buffer, filename)) {
-    riskScore += 3
-    reasons.push('Malformed or truncated file header')
-  }
-
-  // Final decision map
   let level = 0
-  if (riskScore >= 6) level = 4 // BLOCK IMMEDIATELY
-  else if (riskScore >= 4) level = 3 // CRITICAL
-  else if (riskScore >= 2) level = 2 // SUSPICIOUS
-  else if (riskScore >= 1) level = 1 // WARNING
+
+  // Entropy-only classification mirroring the Python entropy_risk_level:
+  // 0 = Safe, 1 = Warning, 2 = Suspicious, 3 = Critical, 4 = Block Immediately
+  if (entropy === 0) {
+    level = 4
+    reasons.push('Empty or fully corrupted file')
+  } else if (entropy < 4.5) {
+    level = 3
+    reasons.push('Very low entropy — truncated or broken file structure')
+  } else if (entropy >= 4.5 && entropy < 7.2) {
+    level = 0
+    reasons.push('Normal entropy — likely safe')
+  } else if (entropy >= 7.2 && entropy < 7.9) {
+    level = 2
+    reasons.push('High entropy — encrypted/compressed/suspicious')
+  } else if (entropy >= 7.9) {
+    level = 4
+    reasons.push('Extremely high entropy — malware-like randomness')
+  } else {
+    level = 1
+    reasons.push('Unexpected entropy pattern')
+  }
+
+  // Use level itself as a simple riskScore proxy
+  const riskScore = level
 
   return { level, riskScore, reasons, entropy, detectedType }
 }
