@@ -55,3 +55,4 @@ You should see: `MongoDB connected to local MongoDB`
 - **Port 27017 in use:** MongoDB is already running
 - **Connection refused:** MongoDB is not running - start the service
 - **Authentication failed:** Check MongoDB configuration or use Atlas instead
+
